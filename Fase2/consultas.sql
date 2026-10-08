@@ -56,13 +56,13 @@ JOIN clientes c USING (id_cliente)
 WHERE g.total_cliente > (SELECT avg(total_cliente) FROM gasto)
 ORDER BY g.total_cliente DESC;
 
--- C7 · autor: luisferzp · ¿Cómo se comporta el volumen de pedidos a lo largo de los meses del año?
-SELECT 
-    date_trunc('month', fecha) AS mes,
-    count(*) AS total_pedidos
+-- C7 · autor: luisferzp · ¿Cómo se comporta el volumen de pedidos para un mes específico (ejemplo: marzo 2026)?
+-- Reescritura según Patrón I2: Se reemplaza date_trunc('month', fecha) = '2026-03-01' por un filtro de rango directo.
+SELECT fecha, count(*) AS total_pedidos
 FROM pedidos
-GROUP BY 1
-ORDER BY 1;
+WHERE fecha >= '2026-03-01' AND fecha < '2026-04-01'
+GROUP BY fecha
+ORDER BY fecha;
 
 -- C8 · autor: luisferzp · ¿Cuál es el ranking de los platillos más vendidos y con mayores ingresos por cada mes?
 SELECT m.nom_plato AS platillo,
