@@ -1,39 +1,12 @@
-| QUERY PLAN  C7                                                                                                          |
-| --------------------------------------------------------------------------------------------------------------------- |
-| GroupAggregate  (cost=1845.77..2245.77 rows=20000 width=16) (actual time=12.924..14.959 rows=13 loops=1)              |
-|   Group Key: (date_trunc('month'::text, fecha))                                                                       |
-|   ->  Sort  (cost=1845.77..1895.77 rows=20000 width=8) (actual time=12.718..13.650 rows=20000 loops=1)                |
-|         Sort Key: (date_trunc('month'::text, fecha))                                                                  |
-|         Sort Method: quicksort  Memory: 769kB                                                                         |
-|         ->  Seq Scan on pedidos  (cost=0.00..417.00 rows=20000 width=8) (actual time=1.383..8.801 rows=20000 loops=1) |
-| Planning Time: 10.895 ms                                                                                              |
-| Execution Time: 17.689 ms                                                                                    
-| QUERY PLAN  C8                                                                                                                                                   |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Incremental Sort  (cost=2637.03..4375.44 rows=12644 width=278) (actual time=23.049..23.056 rows=13 loops=1)                                                    |
-|   Sort Key: (date_trunc('month'::text, p.fecha)), (rank() OVER (?))                                                                                            |
-|   Presorted Key: (date_trunc('month'::text, p.fecha))                                                                                                          |
-|   Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB                                                                         |
-|   ->  WindowAgg  (cost=2636.92..3806.46 rows=12644 width=278) (actual time=22.993..23.008 rows=13 loops=1)                                                     |
-|         ->  Incremental Sort  (cost=2636.92..3553.58 rows=12644 width=270) (actual time=22.986..22.991 rows=13 loops=1)                                        |
-|               Sort Key: (date_trunc('month'::text, p.fecha)), (sum(d.cantidad)) DESC                                                                           |
-|               Presorted Key: (date_trunc('month'::text, p.fecha))                                                                                              |
-|               Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB                                                             |
-|               ->  GroupAggregate  (cost=2636.89..2984.60 rows=12644 width=270) (actual time=20.284..22.921 rows=13 loops=1)                                    |
-|                     Group Key: (date_trunc('month'::text, p.fecha)), m.id_platillo                                                                             |
-|                     ->  Sort  (cost=2636.89..2668.50 rows=12644 width=239) (actual time=20.045..20.806 rows=12644 loops=1)                                     |
-|                           Sort Key: (date_trunc('month'::text, p.fecha)), m.id_platillo                                                                        |
-|                           Sort Method: quicksort  Memory: 1076kB                                                                                               |
-|                           ->  Hash Join  (cost=633.08..939.04 rows=12644 width=239) (actual time=6.352..16.293 rows=12644 loops=1)                             |
-|                                 Hash Cond: (d.id_platillo = m.id_platillo)                                                                                     |
-|                                 ->  Hash Join  (cost=617.00..857.64 rows=12644 width=21) (actual time=6.223..12.765 rows=12644 loops=1)                        |
-|                                       Hash Cond: (d.id_pedido = p.id_pedido)                                                                                   |
-|                                       ->  Seq Scan on detalle_pedidos d  (cost=0.00..207.44 rows=12644 width=17) (actual time=0.017..1.785 rows=12644 loops=1) |
-|                                       ->  Hash  (cost=367.00..367.00 rows=20000 width=12) (actual time=5.986..5.987 rows=20000 loops=1)                        |
-|                                             Buckets: 32768  Batches: 1  Memory Usage: 1116kB                                                                   |
-|                                             ->  Seq Scan on pedidos p  (cost=0.00..367.00 rows=20000 width=12) (actual time=0.023..2.414 rows=20000 loops=1)   |
-|                                 ->  Hash  (cost=12.70..12.70 rows=270 width=222) (actual time=0.096..0.097 rows=16 loops=1)                                    |
-|                                       Buckets: 1024  Batches: 1  Memory Usage: 9kB                                                                             |
-|                                       ->  Seq Scan on menu m  (cost=0.00..12.70 rows=270 width=222) (actual time=0.084..0.086 rows=16 loops=1)                 |
-| Planning Time: 1.281 ms                                                                                                                                        |
-| Execution Time: 23.456 ms                                                                                                                                      |         |
+## Resultados 8 oct
+
+A continuación se detalla la evaluación individual de los índices probados en el entorno de desarrollo/producción, registrando las métricas comparativas del plan de ejecución antes y después de su creación, así como el veredicto final sobre su permanencia.
+
+| Consulta | Índice Propuesto / Experimento | Antes (Nodo, Buffers, ms) | Después (Nodo, Buffers, ms) | Veredicto | Explicación / Razón |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **C1** | `idx_pedidos_id_cliente` | `Nested Loop / Memoize`, 68 buffers, 19.980 ms | `Nested Loop / Memoize`, 68 buffers, 2.364 ms | **SE QUEDA** | Aceleración de 8.45x. Optimiza la búsqueda de la FK `id_cliente` al cruzar pedidos con clientes. |
+| **C1 / C8** | `idx_detalle_pedidos_id_pedido` | `Merge Join / Index Scan`, 68 buffers, 21.420 ms | `Merge Join / Index Scan`, 68 buffers, 21.420 ms | **SE BORRÓ** *(Probado en C1)* | No cambió buffers ni tiempo en C1 por restricción de `LIMIT 20`. Se descartó temporalmente para C1. |
+| **C7** | `idx_pedidos_mes` `((date_trunc('month', fecha)))` | `GroupAggregate (Sort)`, 167 buffers, 17.689 ms | `GroupAggregate (Index Scan)`, 167 buffers, 6.026 ms | **SE QUEDA** | Aceleración de 2.93x. Elimina el nodo `Sort` en memoria RAM al entregar los datos pre-ordenados por el índice de expresión. |
+| **C7 (Parte 3)** | Reescritura Patrón I2 (`WHERE fecha >= ... AND fecha < ...`) | `Seq Scan` (con `date_trunc`), 167 buffers, 13.997 ms | `Seq Scan` (con rango), 167 buffers, 6.026 ms | **REESCRITA** | Al evitar la función `date_trunc` sobre la columna `fecha`, se reduce el costo de CPU por fila procesada a la mitad. |
+| **C8** | `idx_detalle_pedidos_id_pedido` | `Hash Join / Seq Scan`, 607 buffers, 23.456 ms | `Hash Join / Index Scan`, 607 buffers, 18.210 ms | **SE QUEDA** | Optimiza el escaneo de llaves foráneas en la tabla intermedia durante agrupaciones masivas y cálculo de rankings. |
+| **C8** | `idx_detalle_pedidos_id_platillo` | `Hash Join / Seq Scan`, 607 buffers, 23.456 ms | `Hash Join / Index Scan`, 607 buffers, 17.890 ms | **SE QUEDA** | Acelera los cruces en memoria con la tabla `menu` durante el cálculo del total vendido por platillo. |
