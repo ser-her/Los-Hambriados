@@ -1,0 +1,37 @@
+## Veredicto de Rendimiento y Columnas Candidatas para Indexación
+
+### 1. Consulta C1 · Detalle de Pedidos (JOIN de 4 tablas)
+* **Veredicto:**  
+  Ejecuta múltiples escaneos secuenciales (`Seq Scan`) sobre las tablas `pedidos`, `detalle_pedidos` y `clientes`. La falta de índices en las llaves foráneas obliga al motor a realizar operaciones de cruce en memoria (`Hash Join`), degradando el tiempo de respuesta conforme crece el volumen de ventas.
+* **Columnas Candidatas a Indexar:**
+  * `pedidos.id_cliente` (Llave foránea hacia `clientes`)
+  * `detalle_pedidos.id_pedido` (Llave foránea hacia `pedidos`)
+  * `detalle_pedidos.id_platillo` (Llave foránea hacia `menu`)
+
+---
+
+### 2. Consulta C7 · Agregación Mensual de Pedidos
+* **Veredicto:**  
+  Al requerir el cálculo de agregación sobre el 100% de los datos (~20,000 registros), un índice B-Tree tradicional no evita el escaneo de la tabla. El cuello de botella principal ocurre en el nodo **`Sort`**, donde PostgreSQL gasta tiempo precioso ordenando las filas en memoria RAM (`quicksort`) previo a la agrupación.
+* **Columnas Candidatas a Indexar:**
+  * `date_trunc('month', fecha)` en la tabla `pedidos` (**Índice basado en expresiones / funcional** para eliminar el costo del algoritmo `Sort`).
+
+---
+
+### 3. Consulta C8 · Ranking Mensual de Platillos (`RANK()`)
+* **Veredicto:**  
+  Es la consulta más compleja del conjunto. Combina múltiples `Hash Join` con ordenamientos dobles (`Sort` de 1,076 kB en RAM) y una función de ventana (`WindowAgg`). La ausencia de índices en las llaves foráneas y expresiones temporales impacta directamente en la fase de construcción de tablas Hash intermedias.
+* **Columnas Candidatas a Indexar:**
+  * `detalle_pedidos.id_pedido` (Acelera el `JOIN` con `pedidos`)
+  * `detalle_pedidos.id_platillo` (Acelera el `JOIN` con `menu`)
+  * `date_trunc('month', p.fecha)` en la tabla `pedidos` (Optimiza el agrupamiento y la partición del ranking `PARTITION BY`)
+
+---
+
+### Tabla Resumen de Candidatas
+
+| Clave | Tipo de Operación Crítica | Método Actual | Columna(s) Candidata(s) | Tipo de Índice Propuesto |
+| :---: | :--- | :--- | :--- | :--- |
+| **C1** | Cruces relacionales (`JOIN`) | `Seq Scan` + `Hash Join` | `pedidos.id_cliente`, `detalle_pedidos.id_pedido` | B-Tree Estándar (FK) |
+| **C7** | Agregación por fecha truncada | `Seq Scan` + `Sort` | `date_trunc('month', fecha)` en `pedidos` | Funcional / Expresión |
+| **C8** | Ventana + Agregación + Cruces | `Hash Join` + `Sort` + `WindowAgg` | `detalle_pedidos.id_pedido`, `pedidos.fecha` | B-Tree (FK) + Expresión |
